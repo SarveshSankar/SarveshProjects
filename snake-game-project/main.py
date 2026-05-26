@@ -269,9 +269,14 @@ root.mainloop()'''
 import tkinter as tk
 import random
 import os
-import winsound
 import time
 from tkinter import simpledialog
+
+# Cross-platform sound handling
+try:
+    import winsound
+except ImportError:
+    winsound = None
 
 # Game settings
 WIDTH = 600
@@ -280,7 +285,6 @@ SNAKE_SIZE = 20
 LEADERBOARD_FILE = "leaderboard.txt"
 MINIMAP_SIZE = 120
 MINIMAP_PADDING = 10
-
 
 class SnakeGame:
     def __init__(self, root):
@@ -298,8 +302,11 @@ class SnakeGame:
         self.skin = "Neon"
 
         # State Variables
+        self.player_health = 100
+        self.boss_health = 100
         self.multiplier_active = False
         self.ghost_active = False
+        self.ghost_timer = 0
         self.particles = []
         self.game_over_flag = False
         self.paused = False
@@ -307,16 +314,28 @@ class SnakeGame:
         self.food_eaten_count = 0
         self.obstacles = []
         self.portals = []
+        self.projectiles = []
+        self.projectile_cooldown = 0
         self.food = (0, 0)
         self.food_color = "red"
+        self.level = 1
+
+        # Dash Variables
+        self.is_dashing = False
+        self.dash_cooldown = 0  
 
         # Boss Variables
         self.boss_active = False
         self.boss_snake = []
-        self.boss_move_counter = 0
 
         self.high_score = self.get_top_score()
         self.show_menu()
+
+    # ---------------- UTILITIES ----------------
+    def play_sound(self, freq, dur):
+        if winsound:
+            try: winsound.Beep(freq, dur)
+            except: pass
 
     # ---------------- UI MANAGEMENT ----------------
     def clear_ui(self):
@@ -330,46 +349,41 @@ class SnakeGame:
         self.canvas.create_text(WIDTH / 2, 60, fill="white", font=("Arial", 32, "bold"), text="SNAKE DELUXE")
         self.canvas.create_text(WIDTH / 2, 100, fill="#888", font=("Arial", 14), text="Sarvesh Omega Edition")
 
-        tk.Button(self.root, text="Start Game", font=("Arial", 16), command=self.start_game, width=15).place(
-            x=WIDTH / 2 - 90, y=130)
-        self.wrap_btn = tk.Button(self.root, text=f"Warp Mode: {'ON' if self.wrap_mode else 'OFF'}",
-                                  command=self.toggle_wrap, width=20)
+        tk.Button(self.root, text="Start Game", font=("Arial", 16), command=self.start_game, width=15).place(x=WIDTH / 2 - 90, y=130)
+        self.wrap_btn = tk.Button(self.root, text=f"Warp Mode: {'ON' if self.wrap_mode else 'OFF'}", command=self.toggle_wrap, width=20)
         self.wrap_btn.place(x=WIDTH / 2 - 75, y=180)
-        self.obs_btn = tk.Button(self.root, text=f"Obstacles: {'ON' if self.obstacles_enabled else 'OFF'}",
-                                 command=self.toggle_obstacles, width=20)
+        self.obs_btn = tk.Button(self.root, text=f"Obstacles: {'ON' if self.obstacles_enabled else 'OFF'}", command=self.toggle_obstacles, width=20)
         self.obs_btn.place(x=WIDTH / 2 - 75, y=210)
-        self.diff_btn = tk.Button(self.root, text=f"Difficulty: {self.difficulty}", command=self.toggle_difficulty,
-                                  width=20)
+        self.diff_btn = tk.Button(self.root, text=f"Difficulty: {self.difficulty}", command=self.toggle_difficulty, width=20)
         self.diff_btn.place(x=WIDTH / 2 - 75, y=240)
         self.mode_btn = tk.Button(self.root, text=f"Mode: {self.game_mode}", command=self.toggle_mode, width=20)
         self.mode_btn.place(x=WIDTH / 2 - 75, y=270)
         self.skin_btn = tk.Button(self.root, text=f"Skin: {self.skin}", command=self.toggle_skin, width=20)
         self.skin_btn.place(x=WIDTH / 2 - 75, y=300)
-        tk.Button(self.root, text="Leaderboard", command=self.show_leaderboard_screen, width=20).place(x=WIDTH / 2 - 75,
-                                                                                                       y=330)
+        tk.Button(self.root, text="Leaderboard", command=self.show_leaderboard_screen, width=20).place(x=WIDTH / 2 - 75, y=330)
 
     def toggle_wrap(self):
         self.wrap_mode = not self.wrap_mode
-        self.wrap_btn.config(text=f"Warp Mode: {'ON' if self.wrap_mode else 'OFF'}")
+        if hasattr(self, 'wrap_btn'): self.wrap_btn.config(text=f"Warp Mode: {'ON' if self.wrap_mode else 'OFF'}")
 
     def toggle_obstacles(self):
         self.obstacles_enabled = not self.obstacles_enabled
-        self.obs_btn.config(text=f"Obstacles: {'ON' if self.obstacles_enabled else 'OFF'}")
+        if hasattr(self, 'obs_btn'): self.obs_btn.config(text=f"Obstacles: {'ON' if self.obstacles_enabled else 'OFF'}")
 
     def toggle_difficulty(self):
         diffs = ["Easy", "Normal", "Hard"]
         self.difficulty = diffs[(diffs.index(self.difficulty) + 1) % 3]
-        self.diff_btn.config(text=f"Difficulty: {self.difficulty}")
+        if hasattr(self, 'diff_btn'): self.diff_btn.config(text=f"Difficulty: {self.difficulty}")
 
     def toggle_mode(self):
         modes = ["Classic", "Chaos", "Zen", "Time Attack"]
         self.game_mode = modes[(modes.index(self.game_mode) + 1) % len(modes)]
-        self.mode_btn.config(text=f"Mode: {self.game_mode}")
+        if hasattr(self, 'mode_btn'): self.mode_btn.config(text=f"Mode: {self.game_mode}")
 
     def toggle_skin(self):
         skins = ["Neon", "Rainbow", "Fire", "Tron", "Classic"]
         self.skin = skins[(skins.index(self.skin) + 1) % len(skins)]
-        self.skin_btn.config(text=f"Skin: {self.skin}")
+        if hasattr(self, 'skin_btn'): self.skin_btn.config(text=f"Skin: {self.skin}")
 
     # ---------------- DATA HANDLING ----------------
     def get_top_score(self):
@@ -384,8 +398,7 @@ class SnakeGame:
                 for line in f:
                     parts = line.strip().split(",")
                     if len(parts) == 3: scores.append((parts[0], int(parts[1]), parts[2]))
-        except:
-            pass
+        except: pass
         return sorted(scores, key=lambda x: x[1], reverse=True)
 
     def save_to_leaderboard(self, name, score):
@@ -395,8 +408,7 @@ class SnakeGame:
         try:
             with open(LEADERBOARD_FILE, "w") as f:
                 for n, s, d in scores[:5]: f.write(f"{n},{s},{d}\n")
-        except:
-            pass
+        except: pass
 
     def show_leaderboard_screen(self):
         self.clear_ui()
@@ -407,8 +419,7 @@ class SnakeGame:
             self.canvas.create_text(WIDTH / 2, y, fill="gray", font=("Arial", 14), text="No scores yet!")
         else:
             for i, (name, score, date_str) in enumerate(scores, start=1):
-                self.canvas.create_text(WIDTH / 2, y, fill="white", font=("Arial", 14),
-                                        text=f"{i}. {name} - {score} ({date_str})")
+                self.canvas.create_text(WIDTH / 2, y, fill="white", font=("Arial", 14), text=f"{i}. {name} - {score} ({date_str})")
                 y += 30
         tk.Button(self.root, text="Back", command=self.show_menu).place(x=WIDTH / 2 - 25, y=HEIGHT - 40)
 
@@ -419,21 +430,38 @@ class SnakeGame:
         self.canvas.focus_set()
 
         self.score = 0
+        self.player_health = 100
+        self.boss_health = 100
+        self.level = 1
         self.food_eaten_count = 0
         self.high_score = self.get_top_score()
 
         self.game_over_flag = False
         self.paused = False
         self.ghost_active = False
+        self.ghost_timer = 0
         self.multiplier_active = False
+        self.is_dashing = False
+        self.dash_cooldown = 0
         self.boss_active = False
         self.boss_snake = []
+        self.projectiles = []
+        self.projectile_cooldown = 0
         self.direction = "Right"
         self.input_queue = []
 
         self.score_text = self.canvas.create_text(70, 20, fill="white", font=("Arial", 14), text=f"Score: {self.score}")
-        self.high_score_text = self.canvas.create_text(WIDTH - 100, 20, fill="yellow", font=("Arial", 14),
-                                                       text=f"High Score: {self.high_score}")
+        self.level_text = self.canvas.create_text(WIDTH/2, 40, fill="gray", font=("Arial", 10), text=f"Level: {self.level}")
+        self.high_score_text = self.canvas.create_text(WIDTH - 100, 20, fill="yellow", font=("Arial", 14), text=f"High Score: {self.high_score}")
+        self.dash_text = self.canvas.create_text(WIDTH - 100, 45, fill="#39FF14", font=("Arial", 10, "bold"), text="DASH READY")
+        self.plasma_text = self.canvas.create_text(WIDTH - 100, 65, fill="orange", font=("Arial", 10, "bold"), text="PLASMA READY")
+
+        self.canvas.create_text(40, 45, fill="white", font=("Arial", 8, "bold"), text="HP")
+        self.player_hp_bg = self.canvas.create_rectangle(60, 40, 160, 50, fill="#333", outline="white")
+        self.player_hp_fill = self.canvas.create_rectangle(60, 40, 160, 50, fill="#39FF14", outline="")
+        
+        self.boss_hp_bg = self.canvas.create_rectangle(WIDTH/2 - 100, 10, WIDTH/2 + 100, 25, fill="", outline="", tag="boss_ui")
+        self.boss_hp_fill = self.canvas.create_rectangle(WIDTH/2 - 100, 10, WIDTH/2 + 100, 25, fill="", outline="", tag="boss_ui")
 
         if self.game_mode == "Time Attack":
             self.time_attack_start = time.time()
@@ -441,7 +469,7 @@ class SnakeGame:
             self.update_time_attack()
 
         self.snake = [(100, 100), (80, 100), (60, 100)]
-        self.speed = {"Easy": 150, "Normal": 120, "Hard": 90}[self.difficulty]
+        self.base_speed = {"Easy": 150, "Normal": 120, "Hard": 90}[self.difficulty]
 
         self.draw_grid()
         self.spawn_obstacles()
@@ -450,7 +478,117 @@ class SnakeGame:
 
         self.root.bind("<KeyPress>", self.handle_input)
         self.move_snake()
+        self.boss_loop()
         self.update_particles()
+        self.update_dash_ui()
+        self.update_projectiles()
+
+    def update_health_ui(self):
+        fill_x = 60 + (self.player_health)
+        self.canvas.coords(self.player_hp_fill, 60, 40, fill_x, 50)
+        if self.boss_active:
+            boss_fill_x = (WIDTH/2 - 100) + (self.boss_health * 2)
+            self.canvas.coords(self.boss_hp_fill, WIDTH/2 - 100, 10, boss_fill_x, 25)
+
+    def update_dash_ui(self):
+        if self.game_over_flag: return
+        now = time.time()
+        if self.is_dashing:
+            self.canvas.itemconfig(self.dash_text, text="DASHING!!", fill="cyan")
+        elif now < self.dash_cooldown:
+            remaining = int(self.dash_cooldown - now) + 1
+            self.canvas.itemconfig(self.dash_text, text=f"DASH CD: {remaining}s", fill="red")
+        else:
+            self.canvas.itemconfig(self.dash_text, text="DASH READY", fill="#39FF14")
+        self.root.after(200, self.update_dash_ui)
+
+    def fire_projectile(self):
+        now = time.time()
+        if now >= self.projectile_cooldown:
+            hx, hy = self.snake[0]
+            direction_map = {"Up": (0, -1), "Down": (0, 1), "Left": (-1, 0), "Right": (1, 0)}
+            dx, dy = direction_map.get(self.direction, (1, 0))
+            bolt = self.canvas.create_oval(hx+5, hy+5, hx+15, hy+15, fill="orange", outline="white", tag="bolt")
+            self.projectiles.append([bolt, dx * 15, dy * 15, hx, hy])
+            self.projectile_cooldown = now + 20
+            self.play_sound(1200, 150)
+            msg = self.canvas.create_text(WIDTH/2, HEIGHT - 20, text="PLASMA FIRED!", fill="orange", font=("Arial", 10), tag="bolt_msg")
+            self.root.after(2000, lambda: self.canvas.delete("bolt_msg"))
+
+    def update_projectiles(self):
+        if self.game_over_flag: return
+        now = time.time()
+        
+        # Update Plasma Timer UI
+        if now >= self.projectile_cooldown:
+            self.canvas.itemconfig(self.plasma_text, text="PLASMA READY", fill="orange")
+        else:
+            rem = int(self.projectile_cooldown - now) + 1
+            self.canvas.itemconfig(self.plasma_text, text=f"PLASMA CD: {rem}s", fill="#555")
+
+        for p_data in self.projectiles[:]:
+            bolt, dx, dy, x, y = p_data
+            self.canvas.move(bolt, dx, dy)
+            p_data[3] += dx
+            p_data[4] += dy
+            curr_x, curr_y = p_data[3], p_data[4]
+
+            hit_boss = False
+            if self.boss_active:
+                for bx, by in self.boss_snake:
+                    if abs(curr_x - bx) < 20 and abs(curr_y - by) < 20:
+                        self.boss_health -= 15
+                        self.update_health_ui()
+                        hit_boss = True
+                        break
+            
+            if hit_boss or curr_x < 0 or curr_x > WIDTH or curr_y < 0 or curr_y > HEIGHT:
+                self.canvas.delete(bolt)
+                self.projectiles.remove(p_data)
+                if hit_boss: self.create_particles(curr_x, curr_y, "orange")
+        
+        self.root.after(30, self.update_projectiles)
+
+    def trigger_dash(self):
+        now = time.time()
+        if now >= self.dash_cooldown and not self.is_dashing:
+            self.is_dashing = True
+            self.play_sound(1000, 100)
+            self.root.after(1500, self.end_dash)
+
+    def end_dash(self):
+        self.is_dashing = False
+        self.dash_cooldown = time.time() + 5 
+
+    def player_take_damage(self, amount):
+        if self.ghost_active or self.game_mode == "Zen": return
+        self.player_health -= amount
+        self.trigger_shake()
+        self.play_sound(150, 100)
+        if self.player_health <= 0:
+            self.player_health = 0
+            self.game_over()
+        self.update_health_ui()
+
+    def trigger_shake(self):
+        def shake(count):
+            if count > 0 and not self.game_over_flag:
+                dx, dy = random.randint(-4, 4), random.randint(-4, 4)
+                self.canvas.place(x=dx, y=dy)
+                self.root.after(30, lambda: shake(count-1))
+            else:
+                self.canvas.place(x=0, y=0)
+        shake(6)
+
+    def check_level_up(self):
+        new_level = (self.score // 30) + 1
+        if new_level > self.level:
+            self.level = new_level
+            self.trigger_shake()
+            self.canvas.itemconfig(self.level_text, text=f"Level: {self.level}")
+            msg = self.canvas.create_text(WIDTH/2, HEIGHT/2, text=f"LEVEL {self.level}", fill="yellow", font=("Arial", 30, "bold"))
+            self.root.after(1000, lambda: self.canvas.delete(msg))
+            if self.obstacles_enabled: self.spawn_obstacles()
 
     def update_time_attack(self):
         if self.game_mode == "Time Attack" and not self.game_over_flag:
@@ -462,84 +600,92 @@ class SnakeGame:
             self.root.after(1000, self.update_time_attack)
 
     def handle_input(self, event):
-        key = event.keysym
-        if key in ["Up", "Down", "Left", "Right"]:
-            self.input_queue.append(key)
-        elif key.lower() == "p":
+        key = event.keysym.lower()
+        if key in ["up", "down", "left", "right"]:
+            # Standard movement handles title-case keysyms from standard TK
+            self.input_queue.append(event.keysym)
+        elif key == "space":
+            self.trigger_dash()
+        elif key == "f":
+            self.fire_projectile()
+        elif key == "p":
             self.paused = not self.paused
 
     def spawn_boss(self):
         self.boss_active = True
+        self.boss_health = 100
         bx, by = WIDTH - SNAKE_SIZE, HEIGHT - SNAKE_SIZE
-        # Boss starts as a small segment
-        self.boss_snake = [(bx, by), (bx, by), (bx, by)]
-        try:
-            winsound.Beep(400, 200)
-            winsound.Beep(200, 200)
-        except:
-            pass
+        self.boss_snake = [(bx, by), (bx + SNAKE_SIZE, by), (bx + (SNAKE_SIZE*2), by)]
+        self.canvas.itemconfig(self.boss_hp_bg, fill="#444", outline="red")
+        self.canvas.itemconfig(self.boss_hp_fill, fill="red")
+        self.play_sound(400, 200)
+
+    # ---------------- BOSS LOOP ----------------
+    def boss_loop(self):
+        if self.game_over_flag: return
+        if self.boss_active and not self.paused:
+            self.move_boss()
+        
+        boss_speed = 100 if self.boss_health < 40 else 180
+        self.root.after(boss_speed, self.boss_loop)
 
     def move_boss(self):
-        """Automated Boss AI Logic"""
-        if not self.boss_active or self.game_over_flag or self.paused: return
-
+        if not self.boss_snake: return
         bhx, bhy = self.boss_snake[0]
         thx, thy = self.snake[0]
         fx, fy = self.food
-
-        # AI DECISION: Priority 1 - Eat food if close. Priority 2 - Hunt player.
-        dist_to_food = abs(bhx - fx) + abs(bhy - fy)
-        target_x, target_y = (fx, fy) if dist_to_food < 250 else (thx, thy)
-
+        dist_to_player = abs(bhx - thx) + abs(bhy - thy)
+        
+        if dist_to_player < 300 or self.boss_health > 50:
+            target_x, target_y = (thx, thy)
+        else:
+            target_x, target_y = (fx, fy)
+            
         directions = [(0, -SNAKE_SIZE), (0, SNAKE_SIZE), (-SNAKE_SIZE, 0), (SNAKE_SIZE, 0)]
         valid_moves = []
-
         for dx, dy in directions:
             nx, ny = bhx + dx, bhy + dy
-            # Collision checks for Boss
-            if 0 <= nx < WIDTH and 0 <= ny < HEIGHT and (nx, ny) not in self.obstacles and (nx,
-                                                                                            ny) not in self.boss_snake:
+            if 0 <= nx < WIDTH and 0 <= ny < HEIGHT and (nx, ny) not in self.obstacles and (nx, ny) not in self.boss_snake:
                 dist = abs(nx - target_x) + abs(ny - target_y)
                 valid_moves.append(((nx, ny), dist))
-
+        
         if valid_moves:
-            # Choose the move that gets closest to the target
             valid_moves.sort(key=lambda x: x[1])
             best_move = valid_moves[0][0]
-
             self.boss_snake.insert(0, best_move)
-
-            # Boss interaction logic
             if best_move == self.food:
-                # Boss grows if it eats the food!
+                self.boss_health = min(100, self.boss_health + 15)
+                self.update_health_ui()
                 self.spawn_food()
-                try:
-                    winsound.Beep(300, 50)
-                except:
-                    pass
             elif best_move in self.snake and not self.ghost_active:
-                self.game_over()
+                self.player_take_damage(20)
+                self.boss_snake.pop()
             else:
                 self.boss_snake.pop()
+        self.draw_frame() 
 
     def spawn_food(self):
-        types = [("red", 1, 75), ("gold", 5, 15), ("cyan", 2, 10)]
-        self.food_color, self.food_value = random.choices([(t[0], t[1]) for t in types], weights=[t[2] for t in types])[
-            0]
-        valid_pos = False
-        attempts = 0
-        while not valid_pos and attempts < 300:
-            fx = random.randint(0, (WIDTH - SNAKE_SIZE) // SNAKE_SIZE) * SNAKE_SIZE
-            fy = random.randint(0, (HEIGHT - SNAKE_SIZE) // SNAKE_SIZE) * SNAKE_SIZE
-            temp_food = (fx, fy)
-            if (temp_food not in self.snake and temp_food not in self.obstacles and
-                    temp_food not in self.boss_snake and temp_food not in self.portals):
-                self.food = temp_food
-                valid_pos = True
-            attempts += 1
+        types = [("red", 1, 65), ("gold", 5, 10), ("cyan", 2, 10), ("blue", 1, 10), ("purple", 1, 5)]
+        self.food_color, self.food_value = random.choices([(t[0], t[1]) for t in types], weights=[t[2] for t in types])[0]
+        occupied = set(self.snake) | set(self.obstacles) | set(self.boss_snake) | set(self.portals)
+        all_positions = [(x, y) for x in range(0, WIDTH, SNAKE_SIZE) for y in range(0, HEIGHT, SNAKE_SIZE)]
+        empty_slots = [pos for pos in all_positions if pos not in occupied]
+        if not empty_slots: self.game_win(); return
+        self.food = random.choice(empty_slots)
         self.canvas.delete("food")
         self.canvas.create_oval(self.food[0], self.food[1], self.food[0] + SNAKE_SIZE, self.food[1] + SNAKE_SIZE,
                                 fill=self.food_color, outline="white", tag="food")
+
+    def activate_ghost(self):
+        self.ghost_active = True
+        self.ghost_timer = 50
+        self.ghost_countdown()
+
+    def ghost_countdown(self):
+        if self.game_over_flag: return
+        if not self.paused: self.ghost_timer -= 1
+        if self.ghost_timer <= 0: self.ghost_active = False
+        else: self.root.after(100, self.ghost_countdown)
 
     def move_snake(self):
         if self.game_over_flag: return
@@ -553,96 +699,124 @@ class SnakeGame:
             if next_move != opposites.get(self.direction): self.direction = next_move
 
         hx, hy = self.snake[0]
-        if self.direction == "Up":
-            hy -= SNAKE_SIZE
-        elif self.direction == "Down":
-            hy += SNAKE_SIZE
-        elif self.direction == "Left":
-            hx -= SNAKE_SIZE
-        elif self.direction == "Right":
-            hx += SNAKE_SIZE
+        if self.direction == "Up": hy -= SNAKE_SIZE
+        elif self.direction == "Down": hy += SNAKE_SIZE
+        elif self.direction == "Left": hx -= SNAKE_SIZE
+        elif self.direction == "Right": hx += SNAKE_SIZE
 
         if self.wrap_mode:
-            hx %= WIDTH;
+            hx %= WIDTH
             hy %= HEIGHT
         elif hx < 0 or hx >= WIDTH or hy < 0 or hy >= HEIGHT:
-            self.game_over();
-            return
+            self.player_take_damage(25)
+            if self.player_health > 0: hx, hy = self.snake[1]
+            else: return
 
         new_head = (hx, hy)
-
         if self.portals:
-            if new_head == self.portals[0]:
-                new_head = self.portals[1]
-            elif new_head == self.portals[1]:
-                new_head = self.portals[0]
+            if new_head == self.portals[0]: new_head = self.portals[1]
+            elif new_head == self.portals[1]: new_head = self.portals[0]
 
         if not self.ghost_active:
             if (new_head in self.snake and self.game_mode != "Zen") or new_head in self.obstacles:
-                self.game_over();
-                return
+                self.player_take_damage(20)
+                if self.player_health <= 0: return
             if self.boss_active and new_head in self.boss_snake:
-                self.game_over();
-                return
+                self.player_take_damage(20)
+                if self.player_health <= 0: return
 
         self.snake.insert(0, new_head)
-
         if new_head == self.food:
             self.score += self.food_value * (2 if self.multiplier_active else 1)
             self.food_eaten_count += 1
+            self.player_health = min(100, self.player_health + 5)
+            
+            if self.food_color == "gold": self.activate_multiplier()
+            if self.food_color == "cyan": self.activate_ghost()
+            if self.food_color == "purple":
+                self.obstacles = []
+                self.canvas.delete("obstacle")
+                self.play_sound(600, 150)
+            
+            if self.boss_active:
+                self.boss_health -= 10
+                if self.boss_health <= 0:
+                    self.boss_active = False
+                    self.canvas.delete("boss")
+                    self.canvas.itemconfig(self.boss_hp_bg, fill="", outline="")
+                    self.canvas.itemconfig(self.boss_hp_fill, fill="")
+                    self.score += 50
+            
+            self.trigger_shake()
+            self.check_level_up()
+            self.update_health_ui()
             if self.score > self.high_score:
                 self.high_score = self.score
                 self.canvas.itemconfig(self.high_score_text, text=f"High Score: {self.high_score}")
-            if self.score >= 10 and not self.boss_active: self.spawn_boss()
-            if self.food_eaten_count % 5 == 0 and self.speed > 40: self.speed -= 5
+            if self.score >= 10 and not self.boss_active and self.boss_health > 0: self.spawn_boss()
             self.canvas.itemconfig(self.score_text, text=f"Score: {self.score}")
-            try:
-                winsound.Beep(800 + (self.score * 2), 40)
-            except:
-                pass
+            self.play_sound(800 + (self.score * 2), 40)
             self.create_particles(hx, hy, self.food_color)
-            if self.food_color == "gold": self.activate_multiplier()
-            if self.food_color == "cyan": self.activate_ghost()
             self.spawn_food()
         else:
             self.snake.pop()
 
-        # Boss moves independently but synced to game ticks
-        self.boss_move_counter += 1
-        if self.boss_active and self.boss_move_counter % 2 == 0:
-            self.move_boss()
-
         self.draw_frame()
         self.draw_minimap()
-        self.root.after(self.speed, self.move_snake)
+        
+        current_speed = self.base_speed // 2 if self.is_dashing else self.base_speed
+        self.root.after(current_speed, self.move_snake)
 
     def activate_multiplier(self):
         self.multiplier_active = True
         self.canvas.itemconfig(self.score_text, fill="gold")
-        self.root.after(7000, lambda: [setattr(self, 'multiplier_active', False),
-                                       self.canvas.itemconfig(self.score_text, fill="white")])
+        self.root.after(7000, lambda: [setattr(self, 'multiplier_active', False), self.canvas.itemconfig(self.score_text, fill="white")])
 
-    def activate_ghost(self):
-        self.ghost_active = True
-        self.root.after(5000, lambda: setattr(self, 'ghost_active', False))
+    def draw_eyes(self, x, y, direction, color="black", tag="snake"):
+        e_sz = 4
+        if direction == "Right":
+            self.canvas.create_oval(x+14, y+4, x+14+e_sz, y+4+e_sz, fill=color, tag=tag)
+            self.canvas.create_oval(x+14, y+12, x+14+e_sz, y+12+e_sz, fill=color, tag=tag)
+        elif direction == "Left":
+            self.canvas.create_oval(x+2, y+4, x+2+e_sz, y+4+e_sz, fill=color, tag=tag)
+            self.canvas.create_oval(x+2, y+12, x+2+e_sz, y+12+e_sz, fill=color, tag=tag)
+        elif direction == "Up":
+            self.canvas.create_oval(x+4, y+2, x+4+e_sz, y+2+e_sz, fill=color, tag=tag)
+            self.canvas.create_oval(x+12, y+2, x+12+e_sz, y+12+e_sz, fill=color, tag=tag)
+        else: 
+            self.canvas.create_oval(x+4, y+14, x+4+e_sz, y+14+e_sz, fill=color, tag=tag)
+            self.canvas.create_oval(x+12, y+14, x+12+e_sz, y+12+e_sz, fill=color, tag=tag)
+
+    def draw_boss_eyes(self, head, neck):
+        hx, hy = head
+        nx, ny = neck
+        b_dir = "Right" if hx > nx else "Left" if hx < nx else "Down" if hy > ny else "Up"
+        self.draw_eyes(hx, hy, b_dir, color="yellow", tag="boss")
 
     def draw_frame(self):
         self.canvas.delete("snake", "boss")
         for i, (x, y) in enumerate(self.snake):
-            fill_color = "white" if self.ghost_active and i > 0 else self.get_snake_color(i)
-            self.canvas.create_rectangle(x, y, x + SNAKE_SIZE, y + SNAKE_SIZE, fill=fill_color, outline="#222",
-                                         tag="snake")
+            if self.is_dashing:
+                fill_color = "cyan" if i == 0 else "#008B8B"
+            elif self.ghost_active and self.ghost_timer % 2 == 0:
+                fill_color = "white"
+            else:
+                fill_color = self.get_snake_color(i)
+            self.canvas.create_rectangle(x, y, x + SNAKE_SIZE, y + SNAKE_SIZE, fill=fill_color, outline="#222", tag="snake")
+            if i == 0: self.draw_eyes(x, y, self.direction)
+            
         if self.boss_active:
+            is_enraged = self.boss_health < 40
+            body_color = "#FFD700" if is_enraged else "#8B0000"
+            head_color = "#FFA500" if is_enraged else "red"
             for i, (x, y) in enumerate(self.boss_snake):
-                color = "red" if i == 0 else "#8B0000"
-                self.canvas.create_rectangle(x, y, x + SNAKE_SIZE, y + SNAKE_SIZE, fill=color, outline="white",
-                                             tag="boss")
+                color = head_color if i == 0 else body_color
+                self.canvas.create_rectangle(x, y, x + SNAKE_SIZE, y + SNAKE_SIZE, fill=color, outline="white", width=2 if is_enraged else 1, tag="boss")
+                if i == 0 and len(self.boss_snake) > 1: self.draw_boss_eyes(self.boss_snake[0], self.boss_snake[1])
 
     def get_snake_color(self, i):
         if self.skin == "Neon": return "#39FF14" if i == 0 else "#00A36C"
-        if self.skin == "Rainbow":
-            colors = ["red", "orange", "yellow", "green", "blue", "purple"]
-            return colors[i % 6]
+        if self.skin == "Rainbow": return ["red", "orange", "yellow", "green", "blue", "purple"][i % 6]
         if self.skin == "Fire": return "#FF4500" if i == 0 else "#FF8C00"
         if self.skin == "Tron": return "#00FFFF" if i == 0 else "#00008B"
         return "lime" if i == 0 else "green"
@@ -652,43 +826,47 @@ class SnakeGame:
         for y in range(0, HEIGHT, SNAKE_SIZE): self.canvas.create_line(0, y, WIDTH, y, fill="#111", tag="grid")
 
     def spawn_obstacles(self):
-        self.obstacles = []
-        self.canvas.delete("obstacle")
+        self.obstacles = []; self.canvas.delete("obstacle")
         if not self.obstacles_enabled or self.game_mode == "Zen": return
-        for _ in range(8):
+        for _ in range(6 + (self.level * 2)):
             x = random.randint(0, (WIDTH - SNAKE_SIZE) // SNAKE_SIZE) * SNAKE_SIZE
             y = random.randint(0, (HEIGHT - SNAKE_SIZE) // SNAKE_SIZE) * SNAKE_SIZE
-            if (x, y) not in self.snake:
+            if (x, y) not in self.snake and (x, y) != self.food:
                 self.obstacles.append((x, y))
                 self.canvas.create_rectangle(x, y, x + SNAKE_SIZE, y + SNAKE_SIZE, fill="#444", tag="obstacle")
 
     def spawn_portals(self):
-        self.portals = []
-        self.canvas.delete("portal")
+        self.portals = []; self.canvas.delete("portal")
         if self.game_mode == "Zen": return
         for _ in range(2):
             px = random.randint(0, (WIDTH - SNAKE_SIZE) // SNAKE_SIZE) * SNAKE_SIZE
             py = random.randint(0, (HEIGHT - SNAKE_SIZE) // SNAKE_SIZE) * SNAKE_SIZE
             self.portals.append((px, py))
-            self.canvas.create_oval(px + 2, py + 2, px + SNAKE_SIZE - 2, py + SNAKE_SIZE - 2, outline="magenta",
-                                    width=2, tag="portal")
+            self.canvas.create_oval(px + 2, py + 2, px + SNAKE_SIZE - 2, py + SNAKE_SIZE - 2, outline="magenta", width=2, tag="portal")
 
     def draw_minimap(self):
         self.canvas.delete("minimap")
         m_x, m_y = WIDTH - MINIMAP_SIZE - MINIMAP_PADDING, HEIGHT - MINIMAP_SIZE - MINIMAP_PADDING
-        self.canvas.create_rectangle(m_x, m_y, m_x + MINIMAP_SIZE, m_y + MINIMAP_SIZE, fill="#111", outline="#333",
-                                     tag="minimap")
+        self.canvas.create_rectangle(m_x, m_y, m_x + MINIMAP_SIZE, m_y + MINIMAP_SIZE, fill="#050505", outline="#444", width=2, tag="minimap")
+        
         ratio = MINIMAP_SIZE / WIDTH
+        
+        # Food on Minimap
         fx, fy = self.food
-        self.canvas.create_rectangle(m_x + fx * ratio, m_y + fy * ratio, m_x + fx * ratio + 3, m_y + fy * ratio + 3,
-                                     fill=self.food_color, tag="minimap")
-        hx, hy = self.snake[0]
-        self.canvas.create_rectangle(m_x + hx * ratio, m_y + hy * ratio, m_x + hx * ratio + 3, m_y + hy * ratio + 3,
-                                     fill="white", tag="minimap")
-        if self.boss_active:
+        self.canvas.create_rectangle(m_x + fx * ratio, m_y + fy * ratio, m_x + fx * ratio + 4, m_y + fy * ratio + 4, fill=self.food_color, outline="white", tag="minimap")
+        
+        # Boss on Minimap
+        if self.boss_active and self.boss_snake:
             bx, by = self.boss_snake[0]
-            self.canvas.create_rectangle(m_x + bx * ratio, m_y + by * ratio, m_x + bx * ratio + 3, m_y + by * ratio + 3,
-                                         fill="red", tag="minimap")
+            boss_color = "red" if self.boss_health < 40 else "orange"
+            self.canvas.create_rectangle(m_x + bx * ratio, m_y + by * ratio, m_x + bx * ratio + 4, m_y + by * ratio + 4, fill=boss_color, outline="white", tag="minimap")
+
+        # Player on Minimap
+        hx, hy = self.snake[0]
+        self.canvas.create_rectangle(m_x + hx * ratio, m_y + hy * ratio, m_x + hx * ratio + 4, m_y + hy * ratio + 4, fill="#39FF14", outline="white", tag="minimap")
+
+        # CRITICAL: Always push minimap to the top layer
+        self.canvas.tag_raise("minimap")
 
     def create_particles(self, x, y, color):
         for _ in range(6):
@@ -706,31 +884,31 @@ class SnakeGame:
                 self.particles.remove(p_data)
         self.root.after(40, self.update_particles)
 
+    def game_win(self):
+        if self.game_over_flag: return
+        self.game_over_flag = True
+        self.canvas.create_rectangle(WIDTH / 2 - 160, HEIGHT / 2 - 70, WIDTH / 2 + 160, HEIGHT / 2 + 80, fill="black", outline="gold", width=3)
+        self.canvas.create_text(WIDTH / 2, HEIGHT / 2 - 20, text="PERFECT GAME!", fill="gold", font=("Arial", 26, "bold"))
+        self.canvas.create_text(WIDTH / 2, HEIGHT / 2 + 20, text=f"Final Score: {self.score}", fill="white", font=("Arial", 18))
+        tk.Button(self.root, text="Restart", command=self.start_game, width=10).place(x=WIDTH / 2 - 100, y=HEIGHT / 2 + 95)
+        tk.Button(self.root, text="Main Menu", command=self.show_menu, width=10).place(x=WIDTH / 2 + 20, y=HEIGHT / 2 + 95)
+        self.root.after(100, self.prompt_leaderboard)
+
     def game_over(self):
         if self.game_over_flag: return
         self.game_over_flag = True
-        try:
-            winsound.Beep(200, 500)
-        except:
-            pass
-        self.canvas.create_rectangle(WIDTH / 2 - 150, HEIGHT / 2 - 60, WIDTH / 2 + 150, HEIGHT / 2 + 80, fill="black",
-                                     outline="red")
-        self.canvas.create_text(WIDTH / 2, HEIGHT / 2 - 10, text="GAME OVER", fill="red", font=("Arial", 30, "bold"))
-        self.canvas.create_text(WIDTH / 2, HEIGHT / 2 + 30, text=f"Final Score: {self.score}", fill="white",
-                                font=("Arial", 16))
-        tk.Button(self.root, text="Restart", command=self.start_game, width=10).place(x=WIDTH / 2 - 100,
-                                                                                      y=HEIGHT / 2 + 90)
-        tk.Button(self.root, text="Main Menu", command=self.show_menu, width=10).place(x=WIDTH / 2 + 20,
-                                                                                       y=HEIGHT / 2 + 90)
+        self.trigger_shake(); self.play_sound(200, 500)
+        self.canvas.create_rectangle(WIDTH / 2 - 160, HEIGHT / 2 - 70, WIDTH / 2 + 160, HEIGHT / 2 + 80, fill="black", outline="red", width=3)
+        self.canvas.create_text(WIDTH / 2, HEIGHT / 2 - 20, text="GAME OVER", fill="red", font=("Arial", 26, "bold"))
+        self.canvas.create_text(WIDTH / 2, HEIGHT / 2 + 20, text=f"Final Score: {self.score}", fill="white", font=("Arial", 18))
+        tk.Button(self.root, text="Restart", command=self.start_game, width=10).place(x=WIDTH / 2 - 100, y=HEIGHT / 2 + 95)
+        tk.Button(self.root, text="Main Menu", command=self.show_menu, width=10).place(x=WIDTH / 2 + 20, y=HEIGHT / 2 + 95)
         self.root.after(100, self.prompt_leaderboard)
 
     def prompt_leaderboard(self):
         if self.score > 0:
-            name = simpledialog.askstring("High Score!", "Enter your name:", parent=self.root)
-            if name:
-                self.save_to_leaderboard(name, self.score)
-                self.high_score = self.get_top_score()
-
+            name = simpledialog.askstring("High Score!", f"Score: {self.score}\nEnter your name:", parent=self.root)
+            if name: self.save_to_leaderboard(name, self.score); self.high_score = self.get_top_score()
 
 if __name__ == "__main__":
     root = tk.Tk()
